@@ -34,10 +34,10 @@ Grab the latest build from **[Releases](https://github.com/nyxri0f8/pixmirror/re
 
 | Platform | File |
 |---|---|
-| Windows 10/11 (x64) | `PixMirror-1.1.0-windows-x64.zip`: unzip anywhere and run `pixmirror.exe` |
-| Android (most phones) | `PixMirror-1.1.0-android-arm64.apk` |
-| Android (older 32-bit phones) | `PixMirror-1.1.0-android-armv7.apk` |
-| Android emulator / x86 | `PixMirror-1.1.0-android-x86_64.apk` |
+| Windows 10/11 (x64) | `PixMirror-1.1.1-windows-x64.zip`: unzip anywhere and run `pixmirror.exe` |
+| Android (most phones) | `PixMirror-1.1.1-android-arm64.apk` |
+| Android (older 32-bit phones) | `PixMirror-1.1.1-android-armv7.apk` |
+| Android emulator / x86 | `PixMirror-1.1.1-android-x86_64.apk` |
 
 ## How it works
 
