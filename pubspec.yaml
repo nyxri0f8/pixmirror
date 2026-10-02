@@ -1,0 +1,30 @@
+name: pixmirror
+description: "Two-way screen mirroring and remote control between Windows and Android."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  crypto: ^3.0.7
+  dynamic_color: 1.7.0
+  ffi: ^2.2.0
+  flutter:
+    sdk: flutter
+  local_notifier: ^0.1.6
+  shared_preferences: ^2.5.5
+  tray_manager: ^0.7.0
+  window_manager: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo.png
+    - assets/tray.png
+    - assets/tray.ico

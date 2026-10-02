@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="input_service_label">PixMirror remote control</string>
+    <string name="input_service_description">Lets your paired PC tap, swipe and type on this phone while you mirror it. PixMirror only acts on input you send from your own trusted devices.</string>
+</resources>
