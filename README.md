@@ -6,6 +6,7 @@
   <a href="https://github.com/nyxri0f8/pixmirror/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/nyxri0f8/pixmirror?style=flat-square&color=5b5bf7"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%2010%2F11%20%7C%20Android%208%2B-22c8ee?style=flat-square">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.47-02569B?style=flat-square&logo=flutter">
+  <a href="SECURITY.md"><img alt="Security tests" src="https://img.shields.io/badge/security%20tests-13%2F13%20passed-34c759?style=flat-square"></a>
   <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-a855f7?style=flat-square"></a>
 </p>
 
@@ -33,10 +34,10 @@ Grab the latest build from **[Releases](https://github.com/nyxri0f8/pixmirror/re
 
 | Platform | File |
 |---|---|
-| Windows 10/11 (x64) | `PixMirror-1.0.0-windows-x64.zip`: unzip anywhere and run `pixmirror.exe` |
-| Android (most phones) | `PixMirror-1.0.0-android-arm64.apk` |
-| Android (older 32-bit phones) | `PixMirror-1.0.0-android-armv7.apk` |
-| Android emulator / x86 | `PixMirror-1.0.0-android-x86_64.apk` |
+| Windows 10/11 (x64) | `PixMirror-1.1.0-windows-x64.zip`: unzip anywhere and run `pixmirror.exe` |
+| Android (most phones) | `PixMirror-1.1.0-android-arm64.apk` |
+| Android (older 32-bit phones) | `PixMirror-1.1.0-android-armv7.apk` |
+| Android emulator / x86 | `PixMirror-1.1.0-android-x86_64.apk` |
 
 ## How it works
 
@@ -53,7 +54,7 @@ flowchart LR
         MI[Accessibility service<br/>touch, back, home, typing]
     end
     PA <-- "① UDP beacons (port 47800)<br/>find each other on Wi-Fi" --> MA
-    PA <-- "② WebSocket (port 47801)<br/>pair once · HMAC auth" --> MA
+    PA <-- "② Encrypted WebSocket (port 47801)<br/>X25519 handshake · ChaCha20-Poly1305" --> MA
     PC1 -- "PC screen frames" --> MA
     MA -- "trackpad / keyboard input" --> PC2
     MC -- "phone screen frames" --> PA
@@ -69,8 +70,8 @@ flowchart TD
     B -- Yes --> C[Devices appear under Nearby]
     C --> D{Paired before?}
     D -- No --> E[Tap Pair → same 6-digit code on both screens → Allow]
-    E --> F[Shared secret saved on both devices]
-    D -- Yes --> G[Silent HMAC challenge — no prompt]
+    E --> F[Each device pins the other's public key]
+    D -- Yes --> G[Pinned key verified — no prompt]
     F --> H{Which way?}
     G --> H
     H -- "PC: Mirror your phone" --> I{Phone already sharing?}
@@ -82,8 +83,9 @@ flowchart TD
 
 ### Under the hood
 
+- **Security.** Every connection is encrypted and mutually authenticated (X25519 + HKDF-SHA256 + ChaCha20-Poly1305), and pairing compares a code derived from the handshake, so no secret ever crosses the network. See [Security](#security).
 - **Discovery.** Every device broadcasts a small JSON beacon every 1.5 s and answers beacons it hears directly, so devices find each other even when a phone or router drops broadcasts.
-- **Pairing and trust.** The first connection shows a 6-digit code on both screens. Once you approve, both sides store a shared secret. Later connections prove the secret with an HMAC-SHA256 challenge, so trusted devices connect instantly in either direction.
+- **Pairing and trust.** The first connection shows a 6-digit code on both screens, derived from the encrypted handshake. Once you approve, each side pins the other's public key. Later connections are checked against it, so trusted devices connect instantly in either direction, and impostors are refused.
 - **Video.**
   - The PC captures with DXGI Desktop Duplication, which is GPU-based and only produces a frame when the screen changes, then encodes with WIC.
   - The phone captures with MediaProjection.
@@ -173,12 +175,29 @@ android/app/src/main/kotlin/.../
   ScreenInfo.kt        real screen size, corner radius and cutouts
 ```
 
+## Security
+
+<p align="center">
+  <img src="docs/security-benchmark.png" alt="PixMirror security test: 13/13 attack scenarios blocked" width="100%">
+</p>
+
+- **End-to-end encryption.** Every frame and every input is encrypted with ChaCha20-Poly1305.
+- **Mutual authentication.** Both devices prove their identity with X25519 identity keys, and every session uses fresh keys (forward secrecy).
+- **MITM-proof pairing.** The 6-digit code comes from the handshake. An attacker in the middle makes the two screens show different codes.
+- **Hardened host:**
+  - LAN-only connections
+  - rate limits and lockout
+  - message size limits
+  - strict input validation before anything reaches the OS
+
+The suite in [`test/security_test.dart`](test/security_test.dart) runs 13 real attacks against the real server, including tampering, replay, impersonation, MITM, fuzzing and flooding, and benchmarks the encryption. See **[SECURITY.md](SECURITY.md)** for the full design, threat model and how to report a vulnerability.
+
 ## Known limitations
 
-- **Traffic is not encrypted** (it stays on your LAN). The pairing secret is sent once, in the clear, when you approve pairing. Use PixMirror on networks you trust.
 - Windows doesn't allow injected input into apps running **as administrator**, or on the lock/UAC screen.
 - Android asks for screen-capture consent each time sharing starts. This is an Android 14+ rule.
 - Video is JPEG frames. Hardware H.264 is the next step for higher frame rates.
+- 1.1 uses a new encrypted protocol, so devices on 1.0 must update, then pair again once.
 
 ## License
 

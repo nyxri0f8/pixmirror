@@ -3,18 +3,15 @@ import 'dart:typed_data';
 
 /// Wire protocol shared by hosts (the device being mirrored) and viewers.
 ///
-/// Transport: one WebSocket per session on [kHostPort].
-///   * JSON text messages carry control + input (`{"t": <type>, ...}`).
-///   * Binary messages carry video frames: [kFrameTag][u16 w][u16 h][jpeg].
+/// Transport: one WebSocket per session on [kHostPort], secured by the
+/// handshake in secure_channel.dart. After it, every message is encrypted:
+///   * JSON control + input messages (`{"t": <type>, ...}`)
+///   * video frames: [kFrameTag][u16 w][u16 h][jpeg]
 ///
-/// Handshake:
-///   viewer -> hello{id,name,platform}
-///   host   -> challenge{nonce}           (viewer already trusted)
-///   viewer -> auth{mac=HMAC-SHA256(secret, nonce)}
-///   host   -> pairing{code}              (unknown viewer; host user confirms)
-///   host   -> paired{secret,id,name}     (approved; both sides store secret)
-///   host   -> welcome{...} | denied{reason}
-const int kProtocolVersion = 1;
+/// Session flow (all encrypted): host -> pairing{code} (unknown key, user
+/// compares the code) -> paired{} -> waiting{} (phone asked to share) ->
+/// welcome{...}; or denied{reason}. Then frames/cursor out, input/acks in.
+const int kProtocolVersion = 2;
 const int kDiscoveryPort = 47800;
 const int kHostPort = 47801;
 const int kFrameTag = 0x01;

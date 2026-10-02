@@ -1,13 +1,14 @@
 name: pixmirror
 description: "Two-way screen mirroring and remote control between Windows and Android."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.13.4
 
 dependencies:
   crypto: ^3.0.7
+  cryptography: ^2.9.0
   dynamic_color: 1.7.0
   ffi: ^2.2.0
   flutter:

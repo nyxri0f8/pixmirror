@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../platform/screen_host.dart';
+import 'input_guard.dart';
 import 'protocol.dart';
-import 'security.dart';
+import 'secure_channel.dart';
 import 'store.dart';
 
-/// A viewer asking to pair. The UI shows [code] and resolves [decision].
+/// A viewer asking to pair. The UI shows [code] — the handshake's short
+/// authentication string — and resolves [decision].
 class PairRequest {
   PairRequest(this.id, this.name, this.platform, this.code);
   final String id;
@@ -33,35 +36,103 @@ class ActiveViewer {
   final String platform;
 }
 
+/// Sliding-window limits per remote address, so a hostile device on the LAN
+/// cannot flood pairing prompts or brute-force its way in.
+class RateLimiter {
+  RateLimiter({this.connectionsPerMinute = 20, this.pairingsPer10Min = 4, this.failuresBeforeLockout = 5});
+
+  final int connectionsPerMinute;
+  final int pairingsPer10Min;
+  final int failuresBeforeLockout;
+  final _connections = <String, List<DateTime>>{};
+  final _pairings = <String, List<DateTime>>{};
+  final _failures = <String, List<DateTime>>{};
+
+  bool _hit(Map<String, List<DateTime>> map, String key, Duration window, int max, {bool record = true}) {
+    final now = DateTime.now();
+    final list = map.putIfAbsent(key, () => [])..removeWhere((t) => now.difference(t) > window);
+    if (list.length >= max) return false;
+    if (record) list.add(now);
+    return true;
+  }
+
+  bool allowConnection(String ip) =>
+      !isLockedOut(ip) && _hit(_connections, ip, const Duration(minutes: 1), connectionsPerMinute);
+  bool allowPairing(String ip) => _hit(_pairings, ip, const Duration(minutes: 10), pairingsPer10Min);
+  void recordFailure(String ip) => _hit(_failures, ip, const Duration(minutes: 10), 1 << 30);
+  bool isLockedOut(String ip) =>
+      !_hit(_failures, ip, const Duration(minutes: 10), failuresBeforeLockout, record: false);
+}
+
 /// Accepts viewers over WebSocket, authenticates them and streams frames.
 /// One viewer at a time keeps things simple and private.
 class HostServer extends ChangeNotifier {
-  HostServer({required this.store, required this.host, required this.accepting});
+  HostServer({
+    required this.store,
+    required this.host,
+    required this.accepting,
+    this.port = kHostPort,
+    InternetAddress? bindAddress,
+    this.allowAddress = isLocalNetwork,
+    RateLimiter? limiter,
+  })  : limiter = limiter ?? RateLimiter(),
+        bindAddress = bindAddress ?? InternetAddress.anyIPv4;
+
+  final InternetAddress bindAddress;
 
   final Store store;
   final ScreenHost host;
   final bool Function() accepting;
+  final int port;
+
+  /// Only devices on the local network may connect.
+  final bool Function(InternetAddress) allowAddress;
+  final RateLimiter limiter;
 
   HttpServer? _server;
   _HostSession? _session;
   PairRequest? pendingPair;
   ShareRequest? shareRequest;
 
+  /// Security-relevant events, for tests and diagnostics.
+  final events = StreamController<String>.broadcast();
+
   ActiveViewer? get viewer => _session?.viewer;
+  int get boundPort => _server?.port ?? port;
 
   Future<void> listen() async {
-    _server = await HttpServer.bind(InternetAddress.anyIPv4, kHostPort, shared: true);
+    _server = await HttpServer.bind(bindAddress, port, shared: true);
+    _server!
+      ..idleTimeout = const Duration(seconds: 15)
+      ..serverHeader = null;
     _server!.listen((request) async {
-      if (request.uri.path != '/ws' || !WebSocketTransformer.isUpgradeRequest(request)) {
-        request.response
-          ..statusCode = HttpStatus.notFound
-          ..close();
-        return;
+      final remote = request.connectionInfo?.remoteAddress;
+      final ip = remote?.address ?? '?';
+      if (remote == null || !allowAddress(remote)) {
+        events.add('rejected non-local $ip');
+        return _refuse(request, HttpStatus.forbidden);
       }
-      final ws = await WebSocketTransformer.upgrade(request);
-      ws.pingInterval = const Duration(seconds: 4);
-      _HostSession(this, ws).run();
+      if (!limiter.allowConnection(ip)) {
+        events.add('rate-limited $ip');
+        return _refuse(request, HttpStatus.tooManyRequests);
+      }
+      if (request.uri.path != '/ws' || !WebSocketTransformer.isUpgradeRequest(request)) {
+        return _refuse(request, HttpStatus.notFound);
+      }
+      try {
+        final ws = await WebSocketTransformer.upgrade(request);
+        ws.pingInterval = const Duration(seconds: 4);
+        _HostSession(this, ws, ip).run();
+      } catch (_) {}
     });
+  }
+
+  void _refuse(HttpRequest r, int status) {
+    try {
+      r.response
+        ..statusCode = status
+        ..close();
+    } catch (_) {}
   }
 
   void answerPair(bool allow) {
@@ -92,14 +163,15 @@ class HostServer extends ChangeNotifier {
 }
 
 class _HostSession {
-  _HostSession(this.server, this.ws);
+  _HostSession(this.server, this.ws, this.ip);
 
   final HostServer server;
   final WebSocket ws;
+  final String ip;
   ActiveViewer? viewer;
+  SecureChannel? _ch;
 
-  var _stage = 0; // 0 hello, 1 auth, 2 pairing, 3 live, 4 closed
-  String? _nonce;
+  var _stage = 0; // 0 handshake, 2 waiting (pair/share), 3 live, 4 closed
   String? _peerId;
   String? _peerName;
   String? _peerPlatform;
@@ -107,36 +179,58 @@ class _HostSession {
   Completer<void>? _ackWaiter;
   bool _forceNext = true;
   Timer? _cursorTimer;
-  Timer? _helloTimeout;
   CursorState? _lastCursor;
+  ShareRequest? _shareRequest;
 
   ScreenHost get host => server.host;
   Store get store => server.store;
 
   void send(String type, [Map<String, Object?> fields = const {}]) {
     if (_stage == 4) return;
-    try {
-      ws.add(encodeMsg(type, fields));
-    } catch (_) {}
+    _ch?.sendJson({'t': type, ...fields});
   }
 
-  void run() {
-    _helloTimeout = Timer(const Duration(seconds: 10), () {
-      if (_stage < 3 && _stage != 2) close('Handshake timed out');
-    });
-    ws.listen(_onMessage, onDone: _cleanup, onError: (_) => _cleanup());
+  Future<void> run() async {
+    final incoming = StreamIterator<dynamic>(ws);
+    try {
+      final hs = await handshake(
+        ws: ws,
+        incoming: incoming,
+        identity: store.identity,
+        initiator: false,
+        name: store.deviceName,
+        platform: Store.platform,
+      );
+      _ch = hs.channel..maxMessageBytes = 64 * 1024; // viewers only send input
+      _peerId = hs.peerId;
+      _peerName = hs.peerName;
+      _peerPlatform = hs.peerPlatform;
+      await _admit(hs);
+      if (_stage == 4) return;
+      await for (final m in _ch!.messages()) {
+        if (_stage == 4) break;
+        if (m is Map<String, dynamic>) _onMessage(m);
+      }
+    } on SecurityException catch (e) {
+      server.limiter.recordFailure(ip);
+      server.events.add('security: ${e.message} from $ip');
+    } catch (_) {
+      // Timeout or socket error.
+    }
+    if (_stage != 4) close('Connection closed');
   }
 
   void close(String reason) {
     if (_stage == 4) return;
     if (_stage < 3) send(Msg.denied, {'reason': reason});
     if (_stage == 3) send(Msg.bye, {'reason': reason});
-    ws.close();
+    _stage = 4;
+    // Let the final encrypted message flush before closing.
+    Future.delayed(const Duration(milliseconds: 50), () => ws.close());
     _cleanup();
   }
 
   void _cleanup() {
-    if (_stage == 4) return;
     _stage = 4;
     // Release the session first: anything below failing must never leave
     // the host stuck thinking a viewer is still connected.
@@ -144,7 +238,6 @@ class _HostSession {
       server._session = null;
       server._changed();
     }
-    _helloTimeout?.cancel();
     _cursorTimer?.cancel();
     final waiter = _ackWaiter;
     if (waiter != null && !waiter.isCompleted) waiter.complete();
@@ -162,62 +255,39 @@ class _HostSession {
     }
   }
 
-  void _onMessage(dynamic data) {
-    final m = decodeMsg(data);
-    if (m == null) return;
-    switch (_stage) {
-      case 0:
-        if (m['t'] == Msg.hello) _onHello(m);
-      case 1:
-        if (m['t'] == Msg.auth) _onAuth(m);
-      case 3:
-        _onLive(m);
-    }
-  }
-
-  void _onHello(Map<String, dynamic> m) {
-    _peerId = m['id'] as String?;
-    _peerName = (m['name'] as String?) ?? 'Unknown device';
-    _peerPlatform = (m['platform'] as String?) ?? 'unknown';
-    if (_peerId == null) return close('Bad hello');
+  Future<void> _admit(HandshakeResult hs) async {
     // Phones accept while the app is alive and ask their user to start
     // sharing on demand; PCs accept only while "Allow control" is on.
     if (!server.accepting()) return close('Sharing is off');
     final existing = server._session;
-    // The same device reconnecting (e.g. after Wi-Fi dropped) replaces its
-    // old session once it authenticates; a different device is refused.
     if (existing != null && existing.viewer?.id != _peerId) {
       return close('${existing.viewer?.name ?? 'Another device'} is already connected');
     }
-    if (store.isTrusted(_peerId!)) {
-      _stage = 1;
-      _nonce = Store.randomToken(16);
-      send(Msg.challenge, {'nonce': _nonce});
-    } else {
-      _pair();
-    }
-  }
 
-  void _onAuth(Map<String, dynamic> m) {
     final trusted = store.trustedById(_peerId!);
-    final mac = m['mac'] as String? ?? '';
-    if (trusted == null || !constantTimeEquals(mac, signNonce(trusted.secret, _nonce!))) {
-      return close('auth');
+    final pinned = trusted != null &&
+        constantTimeBytesEqual(base64.decode(trusted.publicKey), hs.peerPublicKey);
+    if (pinned) {
+      if (trusted.name != _peerName) {
+        trusted.name = _peerName!;
+        store.trust(trusted);
+      }
+      server.events.add('trusted $_peerId');
+      return _goLive();
     }
-    if (trusted.name != _peerName) {
-      trusted.name = _peerName!;
-      store.trust(trusted);
-    }
-    _goLive();
-  }
 
-  Future<void> _pair() async {
+    // Unknown key: numeric-comparison pairing using the handshake's SAS.
+    if (!server.limiter.allowPairing(ip)) {
+      server.events.add('pairing rate-limited $ip');
+      return close('Too many pairing attempts. Try again later.');
+    }
     if (server.pendingPair != null) return close('Another pairing is in progress');
     _stage = 2;
-    final request = PairRequest(_peerId!, _peerName!, _peerPlatform!, pairingCode());
+    final request = PairRequest(_peerId!, _peerName!, _peerPlatform!, hs.sas);
     server.pendingPair = request;
     server._changed();
-    send(Msg.pairing, {'code': request.code});
+    server.events.add('pairing $_peerId');
+    send(Msg.pairing, {'code': hs.sas});
 
     final allowed = await request.decision.future
         .timeout(const Duration(seconds: 60), onTimeout: () => false);
@@ -228,24 +298,20 @@ class _HostSession {
     if (_stage == 4) return;
     if (!allowed) return close('Request declined');
 
-    final secret = Store.randomToken(32);
+    // No secret crosses the network: each side simply pins the other's key.
     store.trust(TrustedDevice(
-        id: _peerId!, name: _peerName!, platform: _peerPlatform!, secret: secret));
-    send(Msg.paired, {
-      'secret': secret,
-      'id': store.deviceId,
-      'name': store.deviceName,
-      'platform': Store.platform,
-    });
+      id: _peerId!,
+      name: _peerName!,
+      platform: _peerPlatform!,
+      publicKey: base64.encode(hs.peerPublicKey),
+    ));
+    send(Msg.paired, {});
     final other = server._session;
     if (other != null && other.viewer?.id != _peerId) return close('Another device connected first');
-    _goLive();
+    await _goLive();
   }
 
-  ShareRequest? _shareRequest;
-
   Future<void> _goLive() async {
-    _helloTimeout?.cancel();
     if (!host.running) {
       _stage = 2;
       final request = ShareRequest(_peerName!);
@@ -275,7 +341,6 @@ class _HostSession {
     final (w, h) = host.screenSize;
     send(Msg.welcome, {
       'device': info,
-      'id': store.deviceId,
       'name': store.deviceName,
       'platform': host.platform,
       'w': w,
@@ -331,14 +396,16 @@ class _HostSession {
         continue;
       }
       _inFlight++;
-      ws.add(encodeFrame(frame.jpeg, frame.width, frame.height));
+      await _ch!.sendFrame(encodeFrame(frame.jpeg, frame.width, frame.height));
       final wait = frameGap - clock.elapsed;
       if (wait > Duration.zero) await Future.delayed(wait);
       clock.reset();
     }
   }
 
-  void _onLive(Map<String, dynamic> m) {
+  void _onMessage(Map<String, dynamic> m) {
+    // Nothing but control traffic is accepted until the session is live.
+    if (_stage != 3) return;
     switch (m['t']) {
       case Msg.ack:
         if (_inFlight > 0) _inFlight--;
@@ -353,10 +420,10 @@ class _HostSession {
         }
         _forceNext = true;
       case Msg.bye:
-        ws.close();
-        _cleanup();
+        close('Viewer left');
       default:
-        host.handleInput(m);
+        final safe = sanitizeInput(m, host.platform);
+        if (safe != null) host.handleInput(safe);
     }
   }
 }

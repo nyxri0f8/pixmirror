@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -7,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../platform/screen_host.dart';
 import 'discovery.dart';
 import 'protocol.dart';
-import 'security.dart';
+import 'secure_channel.dart';
 import 'store.dart';
 
 enum SessionPhase { connecting, awaitingApproval, awaitingShare, live, closed }
@@ -47,55 +48,86 @@ class RemoteSession extends ChangeNotifier {
   bool get isTouchHost => hostPlatform == 'android';
 
   Future<void> connect() async {
+    final WebSocket ws;
     try {
-      final ws = await WebSocket.connect('ws://${peer.address.address}:${peer.port}/ws')
+      ws = await WebSocket.connect('ws://${peer.address.address}:${peer.port}/ws')
           .timeout(const Duration(seconds: 6));
-      ws.pingInterval = const Duration(seconds: 4);
-      _ws = ws;
-      ws.listen(_onData, onDone: () => _end(error ?? 'Connection closed'),
-          onError: (_) => _end('Connection lost'));
-      send(Msg.hello, {
-        'v': kProtocolVersion,
-        'id': store.deviceId,
-        'name': store.deviceName,
-        'platform': Store.platform,
-      });
     } catch (_) {
-      _end("Couldn't reach ${peer.name}. Make sure both devices are on the same Wi-Fi.");
+      return _end("Couldn't reach ${peer.name}. Make sure both devices are on the same Wi-Fi.");
+    }
+    ws.pingInterval = const Duration(seconds: 4);
+    _ws = ws;
+    try {
+      final hs = await handshake(
+        ws: ws,
+        incoming: StreamIterator<dynamic>(ws),
+        identity: store.identity,
+        initiator: true,
+        name: store.deviceName,
+        platform: Store.platform,
+      );
+      // Discovery beacons are unauthenticated, so make sure the device that
+      // answered owns the identity we meant to reach. Anyone else on the
+      // network pretending to be it fails here.
+      if (hs.peerId != peer.id) {
+        throw SecurityException('identity mismatch');
+      }
+      final trusted = store.trustedById(peer.id);
+      if (trusted != null &&
+          !constantTimeBytesEqual(base64.decode(trusted.publicKey), hs.peerPublicKey)) {
+        throw SecurityException('pinned key changed');
+      }
+      _hs = hs;
+      _ch = hs.channel;
+      await for (final m in hs.channel.messages()) {
+        if (phase == SessionPhase.closed) break;
+        if (m is Uint8List) {
+          final f = decodeFrame(m);
+          if (f != null) _enqueue(f);
+        } else if (m is Map<String, dynamic>) {
+          try {
+            _onMessage(m);
+          } catch (_) {
+            // Ignore malformed fields rather than crash the viewer.
+          }
+        }
+      }
+      _end(error ?? 'Connection closed');
+    } on SecurityException catch (e) {
+      ws.close();
+      _end(e.message == 'identity mismatch' || e.message == 'pinned key changed'
+          ? 'Security warning: the device answering is not ${peer.name}. '
+              'Connection stopped to protect you.'
+          : 'Secure connection failed (${e.message}). Update PixMirror on both devices.');
+    } catch (_) {
+      _end(error ?? 'Connection lost');
     }
   }
+
+  HandshakeResult? _hs;
+  SecureChannel? _ch;
 
   void send(String type, [Map<String, Object?> fields = const {}]) {
     if (phase == SessionPhase.closed) return;
-    _ws?.add(encodeMsg(type, fields));
+    _ch?.sendJson({'t': type, ...fields});
   }
 
-  void _onData(dynamic data) {
-    if (data is List<int>) {
-      final f = decodeFrame(data);
-      if (f != null) _enqueue(f);
-      return;
-    }
-    final m = decodeMsg(data);
-    if (m == null) return;
+  void _onMessage(Map<String, dynamic> m) {
     switch (m['t']) {
-      case Msg.challenge:
-        final trusted = store.trustedById(peer.id);
-        if (trusted == null) return _end('Pairing data missing. Try again.');
-        send(Msg.auth, {'mac': signNonce(trusted.secret, m['nonce'] as String)});
       case Msg.pairing:
-        pairCode = m['code'] as String;
+        pairCode = _hs?.sas;
         phase = SessionPhase.awaitingApproval;
         notifyListeners();
       case Msg.waiting:
         phase = SessionPhase.awaitingShare;
         notifyListeners();
       case Msg.paired:
+        final hs = _hs!;
         store.trust(TrustedDevice(
-          id: m['id'] as String,
-          name: m['name'] as String,
-          platform: m['platform'] as String,
-          secret: m['secret'] as String,
+          id: hs.peerId,
+          name: hs.peerName,
+          platform: hs.peerPlatform,
+          publicKey: base64.encode(hs.peerPublicKey),
         ));
       case Msg.welcome:
         hostName = m['name'] as String;
@@ -124,14 +156,7 @@ class RemoteSession extends ChangeNotifier {
           CursorKind.values[(m['k'] as int).clamp(0, 4)],
         );
       case Msg.denied:
-        final reason = m['reason'] as String? ?? 'Declined';
-        if (reason == 'auth') {
-          // The other side forgot us; drop our half so the next try re-pairs.
-          store.forget(peer.id);
-          error = '${peer.name} no longer trusts this device. Connect again to re-pair.';
-        } else {
-          error = reason;
-        }
+        error = m['reason'] as String? ?? 'Declined';
       case Msg.bye:
         error = m['reason'] as String?;
     }

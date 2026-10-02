@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'protocol.dart';
+import 'secure_channel.dart';
+
+/// Device ids are 120-bit key fingerprints in base64url (20 chars).
+final _idFormat = RegExp(r'^[A-Za-z0-9_-]{20}$');
 
 class Peer {
   Peer({
@@ -115,9 +119,20 @@ class Discovery {
     final dg = _socket?.receive();
     if (dg == null) return;
     try {
+      // Beacons are untrusted input: bound their size, accept only LAN
+      // senders, and validate every field before it reaches the UI.
+      if (dg.data.length > 1024 || !isLocalNetwork(dg.address)) return;
       final j = jsonDecode(utf8.decode(dg.data)) as Map<String, dynamic>;
       if (j['pm'] != kProtocolVersion) return;
-      final peerId = j['id'] as String;
+      final peerId = j['id'];
+      final port = j['port'];
+      if (peerId is! String || !_idFormat.hasMatch(peerId)) return;
+      if (port is! int || port < 1024 || port > 65535) return;
+      if (j['platform'] != 'android' && j['platform'] != 'windows') return;
+      final rawName = j['name'];
+      if (rawName is! String) return;
+      j['name'] = rawName.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
+      if ((j['name'] as String).isEmpty || (j['name'] as String).length > 64) return;
       if (peerId == id) return;
       // Answer directly. Some phones and routers drop outgoing broadcasts;
       // a unicast reply means hearing either side is enough for both to

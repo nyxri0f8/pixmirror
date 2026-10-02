@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -675,8 +676,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
             Positioned.fill(
               child: LayoutBuilder(builder: (context, c) => _screenSurface(c.biggest)),
             ),
-            if (s.frame.value == null)
-              const Center(child: _WaitingForScreen()),
+            _WaitingOverlay(frame: s.frame),
             // Hidden field that receives the phone's soft keyboard.
             Positioned(
               left: 0,
@@ -790,6 +790,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  static Rect _shrunk(Rect r, double f) =>
+      Rect.fromCenter(center: r.center, width: r.width * f, height: r.height * f);
+
   Widget _phoneFrame(BoxConstraints c) {
     final aspect = _phoneAspect;
     var h = c.maxHeight - _bezel * 2;
@@ -808,11 +811,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final corner = s.device['corner'];
     final radius = corner is int && corner > 0 ? corner * scale : math.min(w, h) * 0.09;
     final sameOrientation = (pw >= ph) == (w >= h);
-    final raw = (s.device['cutouts'] as List?)?.cast<int>() ?? const <int>[];
+    // Prefer the camera's exact shape (Android 12+). The older bounding rects
+    // are padded safe zones, so shrink those toward the camera's center.
+    final hole = (s.device['holes'] as List?)?.cast<num>();
+    final raw = hole ?? (s.device['cutouts'] as List?)?.cast<num>() ?? const <num>[];
+    final shrink = hole != null ? 1.0 : 0.55;
     final cutouts = <Rect>[
       if (sameOrientation && pw > 0 && ph > 0)
         for (var i = 0; i + 3 < raw.length; i += 4)
-          Rect.fromLTRB(raw[i] / pw, raw[i + 1] / ph, raw[i + 2] / pw, raw[i + 3] / ph),
+          _shrunk(Rect.fromLTRB(raw[i] / pw, raw[i + 1] / ph, raw[i + 2] / pw, raw[i + 3] / ph), shrink),
     ];
 
     return Center(
@@ -833,7 +840,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
           child: Stack(
             children: [
               _screenSurface(Size(w, h), cutouts: cutouts),
-              if (s.frame.value == null) const Center(child: _WaitingForScreen()),
+              _WaitingOverlay(frame: s.frame),
             ],
           ),
         ),
@@ -1142,4 +1149,26 @@ class _PhoneTitleBar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Waiting for the screen…" until the first frame arrives. Listens to the
+/// frame itself: the viewer does not rebuild per frame, so a plain check in
+/// build() would never notice the screen showing up.
+class _WaitingOverlay extends StatelessWidget {
+  const _WaitingOverlay({required this.frame});
+
+  final ValueListenable<ui.Image?> frame;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ui.Image?>(
+        valueListenable: frame,
+        builder: (context, image, _) => IgnorePointer(
+          ignoring: image != null,
+          child: AnimatedOpacity(
+            opacity: image == null ? 1 : 0,
+            duration: const Duration(milliseconds: 250),
+            child: const Center(child: _WaitingForScreen()),
+          ),
+        ),
+      );
 }

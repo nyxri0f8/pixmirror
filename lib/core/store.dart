@@ -1,70 +1,104 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../platform/vault.dart';
 import 'protocol.dart';
+import 'secure_channel.dart';
 
-/// A device we have paired with. Pairing is mutual: the same secret
-/// authenticates either side, so pairing once works in both directions.
+/// A device we have paired with, pinned by its public identity key. Pairing
+/// is mutual, so one pairing works in both directions.
 class TrustedDevice {
   TrustedDevice({
     required this.id,
     required this.name,
     required this.platform,
-    required this.secret,
+    required this.publicKey,
   });
 
+  /// Fingerprint of [publicKey].
   final String id;
   String name;
   final String platform;
-  final String secret; // base64
+  final String publicKey; // base64 X25519
 
   Map<String, Object> toJson() =>
-      {'id': id, 'name': name, 'platform': platform, 'secret': secret};
+      {'id': id, 'name': name, 'platform': platform, 'pk': publicKey};
 
-  static TrustedDevice fromJson(Map<String, dynamic> j) => TrustedDevice(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        platform: j['platform'] as String,
-        secret: j['secret'] as String,
-      );
+  static TrustedDevice? fromJson(Map<String, dynamic> j) {
+    final pk = j['pk'];
+    // Entries from protocol v1 (shared secrets) are dropped: re-pair once.
+    if (pk is! String) return null;
+    return TrustedDevice(
+      id: j['id'] as String,
+      name: j['name'] as String,
+      platform: j['platform'] as String,
+      publicKey: pk,
+    );
+  }
 }
 
 /// Persistent identity, trust list and preferences.
 class Store extends ChangeNotifier {
-  Store._(this._prefs);
+  Store._(this._prefs, this.identity);
 
   final SharedPreferences _prefs;
-  late String deviceId;
+
+  /// Long-term X25519 identity. The device id is its fingerprint.
+  final Identity identity;
+  String get deviceId => identity.fingerprint;
   late String deviceName;
   final Map<String, TrustedDevice> _trusted = {};
 
+  /// Loads the identity private key, sealed by the OS key store (Windows
+  /// DPAPI / Android Keystore), creating it on first run.
+  static Future<Identity> _loadIdentity(SharedPreferences prefs) async {
+    final sealed = prefs.getString('identitySealed');
+    if (sealed != null) {
+      try {
+        return await Identity.fromSeed(await Vault.open(base64.decode(sealed)));
+      } catch (_) {
+        // Unreadable (e.g. profile copied to another machine): start fresh.
+      }
+    }
+    final plain = prefs.getString('identityFallback');
+    if (plain != null) return Identity.fromSeed(base64.decode(plain));
+
+    final id = await Identity.generate();
+    final seed = Uint8List.fromList(await id.seed());
+    try {
+      await prefs.setString('identitySealed', base64.encode(await Vault.seal(seed)));
+    } catch (_) {
+      // No OS vault (unit tests, unusual platforms): keep it in app storage.
+      await prefs.setString('identityFallback', base64.encode(seed));
+    }
+    return id;
+  }
+
   static Future<Store> load({required String defaultName}) async {
-    final store = Store._(await SharedPreferences.getInstance());
+    final prefs = await SharedPreferences.getInstance();
+    final store = Store._(prefs, await _loadIdentity(prefs));
     store._init(defaultName);
     return store;
   }
 
   static String get platform => Platform.isAndroid ? 'android' : 'windows';
 
-  static String randomToken(int bytes) {
-    final rng = Random.secure();
-    return base64Url.encode(List.generate(bytes, (_) => rng.nextInt(256)));
-  }
-
   void _init(String defaultName) {
-    deviceId = _prefs.getString('deviceId') ?? randomToken(12);
-    _prefs.setString('deviceId', deviceId);
+    _prefs.remove('deviceId'); // v1 random id, superseded by the key fingerprint
     deviceName = _prefs.getString('deviceName') ?? defaultName;
     final raw = _prefs.getString('trusted');
     if (raw != null) {
-      for (final j in jsonDecode(raw) as List) {
+      final entries = jsonDecode(raw) as List;
+      for (final j in entries) {
         final d = TrustedDevice.fromJson(j as Map<String, dynamic>);
-        _trusted[d.id] = d;
+        if (d != null) _trusted[d.id] = d;
       }
+      // Purge v1 entries so their shared secrets don't linger on disk.
+      if (_trusted.length != entries.length) _saveTrust();
     }
   }
 

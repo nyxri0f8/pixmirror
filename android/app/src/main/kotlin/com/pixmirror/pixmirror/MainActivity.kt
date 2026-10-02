@@ -102,6 +102,14 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "screenInfo" -> result.success(ScreenInfo.describe(this))
+                "vaultSeal", "vaultOpen" -> {
+                    try {
+                        val data = call.argument<ByteArray>("data") ?: ByteArray(0)
+                        result.success(if (call.method == "vaultSeal") Vault.seal(data) else Vault.open(data))
+                    } catch (e: Exception) {
+                        result.error("vault", e.message, null)
+                    }
+                }
                 "openAppInfo" -> {
                     startActivity(
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)

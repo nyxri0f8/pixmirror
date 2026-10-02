@@ -1,6 +1,7 @@
 package com.pixmirror.pixmirror
 
 import android.content.Context
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
@@ -43,8 +44,20 @@ object ScreenInfo {
         if (Build.VERSION.SDK_INT >= 29) {
             val cutout = d.cutout
             if (cutout != null) {
+                // Padded safe zones; only a fallback for drawing.
                 info["cutouts"] = cutout.boundingRects.flatMap {
                     listOf(it.left, it.top, it.right, it.bottom)
+                }
+                // The camera's actual outline (Android 12+), e.g. the round
+                // punch hole itself rather than the band around it.
+                if (Build.VERSION.SDK_INT >= 31) {
+                    cutout.cutoutPath?.let { path ->
+                        val b = RectF()
+                        path.computeBounds(b, true)
+                        if (!b.isEmpty) {
+                            info["holes"] = listOf(b.left.toDouble(), b.top.toDouble(), b.right.toDouble(), b.bottom.toDouble())
+                        }
+                    }
                 }
             }
         }

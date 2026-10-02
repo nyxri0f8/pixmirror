@@ -615,3 +615,28 @@ PM_API void pm_type(const uint16_t* text, int length) {
     SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
   }
 }
+
+// ---- Key protection (DPAPI) -------------------------------------------------
+//
+// Seals the device identity key to the current Windows user account, so the
+// stored blob is useless if copied to another machine or account.
+
+#include <dpapi.h>
+
+PM_API int pm_protect(const uint8_t* data, int length, int unprotect, uint8_t** out, int* out_len) {
+  DATA_BLOB in{static_cast<DWORD>(length), const_cast<BYTE*>(data)};
+  DATA_BLOB result{};
+  static const wchar_t kDescription[] = L"PixMirror identity";
+  BOOL ok = unprotect
+      ? CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &result)
+      : CryptProtectData(&in, kDescription, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &result);
+  if (!ok) return 0;
+  *out = static_cast<uint8_t*>(malloc(result.cbData));
+  if (*out) {
+    memcpy(*out, result.pbData, result.cbData);
+    *out_len = static_cast<int>(result.cbData);
+  }
+  SecureZeroMemory(result.pbData, result.cbData);
+  LocalFree(result.pbData);
+  return *out ? 1 : 0;
+}
