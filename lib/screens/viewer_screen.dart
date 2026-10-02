@@ -130,7 +130,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final aspect = _phoneAspect;
     if (aspect <= 0) return;
     _fittedAspect = aspect;
-    _restoreWindowSize ??= await windowManager.getSize();
+    try {
+      _restoreWindowSize ??= await windowManager.getSize();
+    } catch (_) {
+      return;
+    }
     final display = ui.PlatformDispatcher.instance.displays.first;
     final screenW = display.size.width / display.devicePixelRatio;
     final screenH = display.size.height / display.devicePixelRatio;
@@ -145,7 +149,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
       h = w / aspect;
     }
     final width = math.max(w + chromeW, 380.0);
-    await windowManager.setSize(Size(width, h + chromeH), animate: true);
+    try {
+      await windowManager.setSize(Size(width, h + chromeH), animate: true);
+    } catch (_) {
+      // No native window (e.g. rendering previews); keep the current size.
+    }
   }
 
   void _onFrameForWindow() {

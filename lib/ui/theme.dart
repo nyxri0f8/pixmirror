@@ -32,7 +32,7 @@ ThemeData buildTheme(ColorScheme? dynamicScheme, Brightness brightness) {
       style: FilledButton.styleFrom(
         minimumSize: const Size(64, 48),
         shape: const StadiumBorder(),
-        textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w600, fontSize: 15),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(

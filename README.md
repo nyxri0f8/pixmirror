@@ -6,7 +6,7 @@
   <a href="https://github.com/nyxri0f8/pixmirror/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/nyxri0f8/pixmirror?style=flat-square&color=5b5bf7"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%2010%2F11%20%7C%20Android%208%2B-22c8ee?style=flat-square">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.47-02569B?style=flat-square&logo=flutter">
-  <a href="SECURITY.md"><img alt="Security tests" src="https://img.shields.io/badge/security%20tests-13%2F13%20passed-34c759?style=flat-square"></a>
+  <a href="SECURITY.md"><img alt="Security tests" src="https://img.shields.io/badge/security%20tests-20%2F20%20passed-34c759?style=flat-square"></a>
   <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-a855f7?style=flat-square"></a>
 </p>
 
@@ -178,7 +178,7 @@ android/app/src/main/kotlin/.../
 ## Security
 
 <p align="center">
-  <img src="docs/security-benchmark.png" alt="PixMirror security test: 13/13 attack scenarios blocked" width="100%">
+  <img src="docs/security-benchmark.png" alt="PixMirror security test suite: 20/20 tests passed" width="100%">
 </p>
 
 - **End-to-end encryption.** Every frame and every input is encrypted with ChaCha20-Poly1305.
@@ -190,7 +190,13 @@ android/app/src/main/kotlin/.../
   - message size limits
   - strict input validation before anything reaches the OS
 
-The suite in [`test/security_test.dart`](test/security_test.dart) runs 13 real attacks against the real server, including tampering, replay, impersonation, MITM, fuzzing and flooding, and benchmarks the encryption. See **[SECURITY.md](SECURITY.md)** for the full design, threat model and how to report a vulnerability.
+The suite in [`test/security_test.dart`](test/security_test.dart) runs **20 security tests**. They include:
+- pairing brute-force, MITM, replay, tampering, malformed and oversized packets
+- authentication bypass, protocol downgrade, key pinning, session isolation, disconnect/reconnect and forward secrecy
+- discovery privacy, port exposure, Android Accessibility and Windows `SendInput` authorization, and clipboard leakage
+- parser fuzzing, dependency and secret scanning, and an end-to-end regression
+
+It also benchmarks the encryption. See **[SECURITY.md](SECURITY.md)** for the full design, threat model and how to report a vulnerability.
 
 ## Known limitations
 

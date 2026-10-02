@@ -213,7 +213,7 @@ class _SetupGuideScreenState extends State<SetupGuideScreen> with WidgetsBinding
                       steps: const [
                         'Tap “Open Accessibility” on the next page and try turning on PixMirror once — Android will say it is restricted. Come back here.',
                         'Tap “Open App info” below.',
-                        'Tap ⋮ (top-right) → “Allow restricted settings”, then confirm with your PIN.',
+                        'Tap the three-dot menu (top-right), then “Allow restricted settings”, and confirm with your PIN.',
                       ],
                       action: 'Open App info',
                       onAction: () => native.invokeMethod('openAppInfo'),
@@ -230,7 +230,7 @@ class _SetupGuideScreenState extends State<SetupGuideScreen> with WidgetsBinding
                           ? const []
                           : const [
                               'Tap “Open Accessibility”.',
-                              'Find “Downloaded apps” (or “Installed apps”) → “PixMirror remote control”.',
+                              'Open “Downloaded apps” (or “Installed apps”), then “PixMirror remote control”.',
                               'Turn it on and confirm. Then come back — this page turns green.',
                             ],
                       action: ready ? null : 'Open Accessibility',

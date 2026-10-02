@@ -13,8 +13,12 @@ import 'store.dart';
 
 /// App-wide state: discovery, our own sharing, and the session we view.
 class AppController extends ChangeNotifier {
-  AppController(this.store)
-      : host = Platform.isAndroid ? AndroidHost() : WindowsHost();
+  AppController(this.store, {ScreenHost? host, bool? desktop})
+      : host = host ?? (Platform.isAndroid ? AndroidHost() : WindowsHost()),
+        // ignore: prefer_initializing_formals
+        _desktop = desktop;
+
+  final bool? _desktop;
 
   final Store store;
   final ScreenHost host;
@@ -31,10 +35,19 @@ class AppController extends ChangeNotifier {
   Stream<Peer> get nearby => _nearby.stream;
   final Set<String> _announcedNearby = {};
 
-  bool get isDesktop => !Platform.isAndroid;
+  bool get isDesktop => _desktop ?? !Platform.isAndroid;
 
   /// Whether this device is currently visible as connectable.
   bool get sharing => isDesktop ? store.allowControl && host.running : host.running;
+
+  /// Wires up state without touching the network or platform services,
+  /// for UI previews and screenshots.
+  @visibleForTesting
+  void initOffline({List<Peer> peers = const []}) {
+    server = HostServer(store: store, host: host, accepting: () => true)..addListener(notifyListeners);
+    discovery = Discovery(id: store.deviceId, name: () => store.deviceName, platform: Store.platform, isSharing: () => sharing);
+    this.peers = peers;
+  }
 
   Future<void> init() async {
     if (Platform.isAndroid) {

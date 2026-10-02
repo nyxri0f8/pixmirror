@@ -43,12 +43,17 @@ class Discovery {
     required this.name,
     required this.platform,
     required this.isSharing,
+    this.port = kDiscoveryPort,
   });
 
   final String id;
   String Function() name;
   final String platform;
   final bool Function() isSharing;
+
+  /// UDP port for beacons (configurable so tests don't collide with a
+  /// running app).
+  final int port;
 
   final Map<String, Peer> _peers = {};
   final _changes = StreamController<List<Peer>>.broadcast();
@@ -64,7 +69,7 @@ class Discovery {
     try {
       _socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
-        kDiscoveryPort,
+        port,
         reuseAddress: true,
       );
     } catch (_) {
@@ -109,7 +114,7 @@ class Discovery {
     } catch (_) {}
     for (final t in targets) {
       try {
-        socket.send(payload, t, kDiscoveryPort);
+        socket.send(payload, t, port);
       } catch (_) {}
     }
   }
@@ -142,7 +147,7 @@ class Discovery {
       if (last == null || now0.difference(last) > const Duration(milliseconds: 1200)) {
         _repliedAt[peerId] = now0;
         try {
-          _socket?.send(_payload(), dg.address, kDiscoveryPort);
+          _socket?.send(_payload(), dg.address, port);
         } catch (_) {}
       }
       final existing = _peers[peerId];

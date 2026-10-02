@@ -118,7 +118,7 @@ class _SettingsState extends State<_Settings> {
                 subtitle: Text(widget.app.phoneInputReady
                     ? 'On. Your PC can tap, swipe and type here.'
                     : 'Off. Turn on "PixMirror remote control" in Accessibility. '
-                        'If it is greyed out: App info → ⋮ → Allow restricted settings.'),
+                        'If it is greyed out: App info > three-dot menu > Allow restricted settings.'),
                 trailing: widget.app.phoneInputReady
                     ? null
                     : FilledButton.tonal(
