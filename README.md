@@ -10,6 +10,16 @@
   <a href="#license"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-a855f7?style=flat-square"></a>
 </p>
 
+## ▶ Watch: how it works (70 s)
+
+<p align="center">
+  <a href="https://github.com/nyxri0f8/pixmirror/blob/main/docs/pixmirror-how-it-works.mp4">
+    <img src="docs/video-poster.png" alt="Watch the PixMirror how-it-works video" width="100%">
+  </a>
+</p>
+
+<p align="center"><sub>Click to play · <a href="https://github.com/nyxri0f8/pixmirror/raw/main/docs/pixmirror-how-it-works.mp4">download MP4</a></sub></p>
+
 **PixMirror** brings the iPhone-Mirroring experience to **Android and Windows**, and it works in **both directions**:
 
 - 📱➡️💻 **Mirror your phone on your PC.** A phone-shaped window with your phone's real dimensions, corner radius and camera cutout. Click to tap, drag to swipe, scroll to scroll, type with your keyboard.
